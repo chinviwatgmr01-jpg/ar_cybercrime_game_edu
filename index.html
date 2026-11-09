@@ -1,0 +1,1471 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AR กำจัดอาชญากรรมทางอินเทอร์เน็ต</title>
+
+  <!-- Google Font: Mitr -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Mitr:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Allowed external libraries: Three.js, MediaPipe Hands and Camera Utils -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <style>
+    :root {
+      --ink: #19324d;
+      --blue: #45b7e8;
+      --mint: #57d6b4;
+      --yellow: #ffdb66;
+      --pink: #ff8da8;
+      --green: #23b978;
+      --red: #f05b68;
+      --panel: rgba(255,255,255,.91);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      font-family: "Mitr", sans-serif;
+      color: var(--ink);
+      background: #102a43;
+      user-select: none;
+    }
+
+    #app { position: fixed; inset: 0; overflow: hidden; background: #142f4b; }
+    #camera-video {
+      position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+      transform: scaleX(-1); opacity: 0; transition: opacity .35s ease;
+      background: linear-gradient(135deg, #193b5a, #10243b);
+    }
+    #camera-video.live { opacity: 1; }
+    #three-root, #hand-canvas, #world-ui { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #three-root { z-index: 2; pointer-events: none; }
+    #three-root canvas { display: block; width: 100%; height: 100%; }
+    #hand-canvas { z-index: 3; pointer-events: none; }
+    #world-ui { z-index: 4; pointer-events: none; }
+
+    .zone { position: absolute; top: 0; bottom: 0; pointer-events: none; }
+    .zone-left {
+      left: 0; width: 25%;
+      background: linear-gradient(180deg, rgba(64,207,231,.15), rgba(80,240,199,.08));
+      border-right: 2px dashed rgba(255,255,255,.54);
+    }
+    .zone-middle {
+      left: 25%; width: 25%;
+      background: linear-gradient(180deg, rgba(14,34,53,.12), rgba(14,34,53,.02));
+      border-right: 1px solid rgba(255,255,255,.12);
+    }
+    .zone-player {
+      left: 50%; width: 50%;
+      background: linear-gradient(180deg, rgba(255,205,91,.08), rgba(89,143,255,.08));
+      border-left: 2px solid rgba(255,255,255,.55);
+    }
+    .zone-caption {
+      position: absolute; top: 104px; left: 12px; padding: 6px 12px;
+      border-radius: 99px; color: white; background: rgba(15,40,61,.55);
+      font-size: clamp(11px, 1vw, 15px); letter-spacing: .2px;
+      box-shadow: 0 4px 14px rgba(0,0,0,.12);
+    }
+    .zone-player .zone-caption { left: 16px; }
+
+    /* Start and end panels */
+    .screen-cover {
+      position: absolute; z-index: 20; inset: 0; display: grid; place-items: center;
+      padding: 22px; overflow-y: auto;
+      background: linear-gradient(135deg, rgba(7,25,43,.66), rgba(10,48,69,.5));
+      backdrop-filter: blur(5px);
+    }
+    .panel {
+      width: min(760px, 94vw); max-height: calc(100vh - 34px); overflow-y: auto;
+      padding: clamp(20px, 3vw, 36px); border-radius: 30px;
+      background: var(--panel); border: 3px solid rgba(255,255,255,.84);
+      box-shadow: 0 24px 80px rgba(0,0,0,.3);
+      text-align: center;
+    }
+    .game-mark {
+      width: 74px; height: 74px; margin: 0 auto 10px; display: grid; place-items: center;
+      border-radius: 24px; transform: rotate(-7deg);
+      background: linear-gradient(135deg, #ffe27a, #ff9db4);
+      box-shadow: 0 10px 24px rgba(243,140,129,.28);
+      font-size: 38px;
+    }
+    h1 { margin: 4px 0 8px; font-weight: 600; line-height: 1.22; font-size: clamp(26px, 4vw, 43px); }
+    .subtitle { margin: 0 auto 18px; max-width: 600px; color: #52677b; font-size: clamp(14px, 1.6vw, 17px); line-height: 1.7; }
+    .rule-card {
+      margin: 16px auto 18px; padding: 15px 18px; max-width: 630px; text-align: left;
+      border-radius: 19px; background: #eef9ff; border: 1px solid #d5effb;
+    }
+    .rule-card strong { display: block; margin-bottom: 5px; color: #167da5; font-size: 17px; }
+    .rule-card p { margin: 3px 0; color: #49647a; font-size: 14px; line-height: 1.65; }
+    .system-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px auto 12px; max-width: 630px; }
+    .system-item {
+      min-height: 66px; display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+      border-radius: 16px; text-align: left; background: #f4f7fa; border: 1px solid #e4edf3;
+    }
+    .system-icon { width: 31px; height: 31px; flex: 0 0 31px; display: grid; place-items: center; border-radius: 50%; font-size: 16px; background: #dfe8ef; color: #718294; }
+    .system-item .label { flex: 1; font-size: 14px; font-weight: 500; }
+    .system-item .state { font-size: 12px; color: #8192a1; white-space: nowrap; }
+    .system-item.loading { border-color: #9fdef7; background: #effaff; }
+    .system-item.ready { border-color: #a9e9ce; background: #effcf6; }
+    .system-item.ready .system-icon { background: #c9f3df; color: #159b65; }
+    .system-item.error { border-color: #ffc8ce; background: #fff4f4; }
+    .system-item.error .system-icon { background: #ffe0e2; color: #d94c5b; }
+    .spinner { width: 17px; height: 17px; display: inline-block; border: 2.5px solid #b8e8f8; border-top-color: #1ca6d6; border-radius: 50%; animation: spin .75s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-note { min-height: 22px; margin: 8px auto 4px; color: #d44a57; font-size: 13px; line-height: 1.5; }
+
+    .action-btn {
+      border: 0; border-radius: 15px; padding: 12px 21px; min-height: 48px;
+      color: white; font-family: inherit; font-size: 16px; font-weight: 500;
+      cursor: pointer; box-shadow: 0 5px 0 rgba(0,0,0,.16), 0 9px 18px rgba(0,0,0,.12);
+      transition: transform .09s ease, filter .15s ease, box-shadow .09s ease;
+    }
+    .action-btn:hover { filter: brightness(1.05); }
+    .action-btn:active { transform: translateY(4px) scale(.985); box-shadow: 0 1px 0 rgba(0,0,0,.16), 0 3px 8px rgba(0,0,0,.1); }
+    .primary-btn { background: linear-gradient(135deg, #1fbb91, #36c7ad); }
+    .secondary-btn { background: linear-gradient(135deg, #39a9e2, #4f9ced); }
+    .retry-btn { background: linear-gradient(135deg, #f49a52, #ef7f67); }
+    .action-btn[hidden] { display: none !important; }
+    .small-note { margin-top: 13px; color: #7b8c9a; font-size: 11px; line-height: 1.5; }
+
+    /* Game HUD */
+    #hud { position: absolute; z-index: 10; top: 12px; left: 50%; transform: translateX(-50%); width: min(760px, calc(100% - 280px)); display: none; }
+    .hud-card {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: stretch; gap: 8px;
+      padding: 9px; border-radius: 20px; background: rgba(255,255,255,.91);
+      border: 2px solid rgba(255,255,255,.75); box-shadow: 0 8px 28px rgba(0,0,0,.16);
+      backdrop-filter: blur(8px);
+    }
+    .hud-stat { min-width: 0; border-radius: 13px; padding: 5px 10px; background: #f1f8fc; text-align: center; }
+    .hud-stat .name { display: block; font-size: 11px; color: #718596; }
+    .hud-stat .value { display: block; color: #23425e; font-size: clamp(18px, 2vw, 25px); font-weight: 600; line-height: 1.25; }
+    #hud-score .value { color: #149c70; }
+    #hud-time .value { color: #267fbd; }
+    #hud-progress .value { color: #a46bc0; }
+    #game-message {
+      margin: 7px auto 0; width: fit-content; max-width: 100%; min-height: 32px; padding: 5px 17px;
+      border-radius: 99px; color: white; background: rgba(20,48,69,.79);
+      text-align: center; font-size: clamp(12px, 1.2vw, 15px); box-shadow: 0 4px 14px rgba(0,0,0,.15);
+      text-shadow: 0 1px 1px rgba(0,0,0,.2);
+    }
+    #game-message.good { background: rgba(19,151,100,.88); }
+    #game-message.bad { background: rgba(203,63,81,.9); }
+    #game-message.info { background: rgba(20,48,69,.79); }
+    #hand-status-line {
+      display: flex; justify-content: center; flex-wrap: wrap; gap: 7px; margin-top: 6px;
+      color: white; font-size: 11px; text-shadow: 0 1px 3px rgba(0,0,0,.45);
+    }
+    #hand-status-line span { padding: 3px 10px; border-radius: 99px; background: rgba(15,38,59,.58); }
+
+    #side-controls {
+      display: none; position: absolute; z-index: 12; top: 15px; right: 15px;
+      width: 145px; gap: 8px; flex-direction: column;
+    }
+    .toggle-btn {
+      width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 9px 11px; border: 0; border-radius: 13px; color: white; font-family: inherit;
+      font-size: 12px; cursor: pointer; box-shadow: 0 4px 0 rgba(0,0,0,.22), 0 6px 13px rgba(0,0,0,.13);
+      transition: transform .08s ease, filter .12s ease;
+    }
+    .toggle-btn:active { transform: translateY(3px); filter: brightness(.94); }
+    .toggle-btn.on { background: linear-gradient(135deg, #20b87d, #3bc99b); }
+    .toggle-btn.off { background: linear-gradient(135deg, #566475, #394858); }
+    .toggle-btn .state-pill { border-radius: 99px; background: rgba(255,255,255,.22); padding: 2px 7px; font-size: 10px; }
+    .toggle-btn.restart { justify-content: center; background: linear-gradient(135deg, #f1a449, #ec805f); }
+
+    /* 2D word labels attached to the 3D fruit */
+    .fruit-label {
+      position: absolute; min-width: 84px; max-width: 180px; transform: translate(-50%, -100%);
+      text-align: center; white-space: normal; padding: 4px 10px 5px; border-radius: 13px;
+      color: #1c3650; font-size: clamp(13px, 1.35vw, 18px); font-weight: 500; line-height: 1.3;
+      background: rgba(255,255,255,.96); border: 2px solid rgba(255,255,255,.9);
+      box-shadow: 0 4px 12px rgba(0,0,0,.17); text-shadow: none;
+    }
+    .charge-ui {
+      position: absolute; width: 48px; height: 190px; display: none; flex-direction: column;
+      align-items: center; gap: 5px; transform: translate(-50%, -50%);
+    }
+    .charge-ui .percent { color: white; font-size: 14px; font-weight: 600; text-shadow: 0 2px 4px #132f48; }
+    .charge-track {
+      position: relative; width: 18px; height: 148px; border: 3px solid rgba(255,255,255,.93);
+      border-radius: 99px; overflow: hidden; background: rgba(14,37,58,.55);
+      box-shadow: 0 3px 12px rgba(0,0,0,.28);
+    }
+    .charge-fill {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 0%; border-radius: 99px;
+      background: linear-gradient(0deg, #35d79e 0%, #f4df64 65%, #ff9a55 100%);
+      transition: height .07s linear;
+    }
+    #score-popup {
+      position: absolute; z-index: 15; left: 50%; top: 48%; transform: translate(-50%, -50%) scale(.72);
+      opacity: 0; pointer-events: none; font-size: clamp(48px, 8vw, 94px); line-height: 1;
+      font-weight: 700; text-shadow: 0 5px 0 rgba(0,0,0,.13), 0 8px 24px rgba(0,0,0,.25);
+    }
+    #score-popup.show { animation: scorePop 1s ease-out forwards; }
+    #score-popup.good { color: #4ff0a5; }
+    #score-popup.bad { color: #ff6477; }
+    @keyframes scorePop {
+      0% { opacity: 0; transform: translate(-50%, -40%) scale(.55); }
+      18% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+      65% { opacity: 1; transform: translate(-50%, -58%) scale(1); }
+      100% { opacity: 0; transform: translate(-50%, -75%) scale(.92); }
+    }
+    #end-screen { display: none; }
+    #end-screen .panel { width: min(560px, 94vw); }
+    .final-score {
+      margin: 15px auto; padding: 16px; border-radius: 20px; background: #effbf6;
+      color: #15996b; font-size: clamp(34px, 6vw, 54px); font-weight: 600;
+    }
+    .end-sub { margin: 0 0 18px; color: #62788b; font-size: 15px; }
+
+    @media (max-width: 800px) {
+      .system-list { grid-template-columns: 1fr; }
+      #hud { width: calc(100% - 24px); top: 8px; }
+      .hud-card { gap: 4px; padding: 6px; }
+      .hud-stat { padding: 4px 5px; }
+      #side-controls { top: auto; bottom: 12px; right: 10px; width: 120px; }
+      .toggle-btn { padding: 7px 8px; }
+      .zone-caption { top: 125px; }
+      .charge-ui { transform: translate(-50%, -50%) scale(.82); }
+    }
+    @media (max-height: 600px) {
+      .panel { padding: 16px 22px; }
+      .game-mark { width: 54px; height: 54px; font-size: 28px; margin-bottom: 4px; }
+      .rule-card { margin: 9px auto; padding: 9px 14px; }
+      .system-list { margin: 9px auto; }
+      .system-item { min-height: 52px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <video id="camera-video" playsinline muted></video>
+    <div id="three-root"></div>
+    <canvas id="hand-canvas"></canvas>
+
+    <div id="world-ui">
+      <div class="zone zone-left"><div class="zone-caption">🍎 โซนคำศัพท์ ¼ จอ</div></div>
+      <div class="zone zone-middle"></div>
+      <div class="zone zone-player"><div class="zone-caption">🖐️ โซนผู้เล่น ½ จอ</div></div>
+      <div id="fruit-labels"></div>
+      <div id="charge-ui" class="charge-ui">
+        <div id="charge-percent" class="percent">0%</div>
+        <div class="charge-track"><div id="charge-fill" class="charge-fill"></div></div>
+      </div>
+      <div id="score-popup"></div>
+    </div>
+
+    <section id="hud">
+      <div class="hud-card">
+        <div class="hud-stat" id="hud-score"><span class="name">⭐ คะแนน</span><span class="value">0</span></div>
+        <div class="hud-stat" id="hud-time"><span class="name">⏱ เวลา</span><span class="value">00:00</span></div>
+        <div class="hud-stat" id="hud-progress"><span class="name">📚 ข้อที่</span><span class="value">1/15</span></div>
+      </div>
+      <div id="game-message" class="info">เริ่มเกมแล้ว! ใช้มือซ้ายจับธนู มือขวากำแล้วดึง</div>
+      <div id="hand-status-line">
+        <span id="hand-left-status">มือซ้าย: ไม่เจอ</span>
+        <span id="hand-right-status">มือขวา: ไม่เจอ</span>
+      </div>
+    </section>
+
+    <aside id="side-controls">
+      <button id="swap-btn" class="toggle-btn on" type="button"><span>🔄 สลับมือ</span><span class="state-pill">ปิด</span></button>
+      <button id="dots-btn" class="toggle-btn on" type="button"><span>✳ จุดมือ</span><span class="state-pill">เปิด</span></button>
+      <button id="sound-btn" class="toggle-btn on" type="button"><span>🔊 เสียง</span><span class="state-pill">เปิด</span></button>
+      <button id="restart-btn" class="toggle-btn restart" type="button">↻ เริ่มใหม่</button>
+    </aside>
+
+    <!-- Welcome / system check screen -->
+    <section id="start-screen" class="screen-cover">
+      <div class="panel">
+        <div class="game-mark">🏹</div>
+        <h1>AR กำจัดอาชญากรรม<br />ทางอินเทอร์เน็ต</h1>
+        <p class="subtitle">เกมการเรียนรู้แบบ AR ฝึกสังเกตคำกริยาที่เกี่ยวข้องกับพฤติกรรมอาชญากรรมทางอินเทอร์เน็ต</p>
+
+        <div class="rule-card">
+          <strong>🎮 วิธีเล่น</strong>
+          <p>• มือซ้ายใช้ประคองคันธนูให้อยู่ในพื้นที่ด้านขวาของจอ</p>
+          <p>• มือขวากำมือเพื่อเริ่มดึง เลื่อนมือไปทางขวาเพื่อเพิ่มแรง และแบมือเพื่อปล่อย</p>
+          <p>• ยิงคำกริยาให้ได้ <b>+10 คะแนน</b> ระวังคำหลอก <b>-5 คะแนน</b></p>
+          <p>• ในแต่ละข้อมีผลไม้ 3 ผล รวมทั้งหมด 15 ข้อ</p>
+        </div>
+
+        <div class="system-list">
+          <div id="camera-status" class="system-item">
+            <span class="system-icon">📷</span><span class="label">เปิดกล้อง</span><span class="state">รอตรวจสอบ</span>
+          </div>
+          <div id="ai-status" class="system-item">
+            <span class="system-icon">✋</span><span class="label">โหลด AI Track มือ</span><span class="state">รอตรวจสอบ</span>
+          </div>
+        </div>
+        <div id="system-error" class="error-note" role="status" aria-live="polite"></div>
+        <button id="check-btn" class="action-btn secondary-btn" type="button">🔍 ตรวจสอบกล้องและโหลด AI Track</button>
+        <button id="retry-btn" class="action-btn retry-btn" type="button" hidden>ลองตรวจสอบอีกครั้ง</button>
+        <button id="start-btn" class="action-btn primary-btn" type="button" hidden>🚀 เริ่มเกม</button>
+        <div class="small-note">แนะนำใช้ Google Chrome บนคอมพิวเตอร์ และอนุญาตการเข้าถึงกล้อง<br />กล้องต้องทำงานบน HTTPS หรือ localhost ในเบราว์เซอร์ที่รองรับ</div>
+      </div>
+    </section>
+
+    <!-- End game screen -->
+    <section id="end-screen" class="screen-cover">
+      <div class="panel">
+        <div class="game-mark">🏆</div>
+        <h1>เก่งมาก! จบภารกิจแล้ว</h1>
+        <p class="subtitle">คุณทำภารกิจกำจัดคำกริยาที่เป็นพฤติกรรมเสี่ยงครบทั้ง 15 ข้อแล้ว</p>
+        <div id="final-score" class="final-score">0 คะแนน</div>
+        <p id="final-time" class="end-sub">ใช้เวลา 00:00</p>
+        <button id="play-again-btn" class="action-btn primary-btn" type="button">🎮 เล่นอีกครั้ง</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    "use strict";
+
+    // ============================================================
+    // CONFIG
+    // ============================================================
+    const CONFIG = {
+      totalRounds: 15,
+      fruitFallSpeedMin: 39,
+      fruitFallSpeedMax: 48,
+      fruitRadius: 32,
+      targetPenalty: 5,
+      correctPoints: 10,
+      decoyPenalty: 5,
+      handLostGraceMs: 300,
+      handLostCancelMs: 1200,
+      minShotCharge: 0.12,
+      maxDrawPixels: 205,
+      drawDeadZone: 13,
+      maxArrowSpeed: 880,
+      minArrowSpeed: 260,
+      arrowGravityLow: 900,
+      arrowGravityHigh: 145,
+      edgePadding: 18,
+      edgeHoldMs: 1000,
+      fadeMs: 520
+    };
+
+    // ============================================================
+    // DOM
+    // ============================================================
+    const $ = (id) => document.getElementById(id);
+    const video = $("camera-video");
+    const rendererRoot = $("three-root");
+    const handCanvas = $("hand-canvas");
+    const handCtx = handCanvas.getContext("2d");
+    const fruitLabelsRoot = $("fruit-labels");
+    const chargeUI = $("charge-ui");
+    const chargeFill = $("charge-fill");
+    const chargePercent = $("charge-percent");
+    const startScreen = $("start-screen");
+    const endScreen = $("end-screen");
+    const checkBtn = $("check-btn");
+    const retryBtn = $("retry-btn");
+    const startBtn = $("start-btn");
+    const systemError = $("system-error");
+    const hud = $("hud");
+    const sideControls = $("side-controls");
+    const popup = $("score-popup");
+    const gameMessage = $("game-message");
+
+    // ============================================================
+    // GAME STATE
+    // ============================================================
+    const state = {
+      checking: false,
+      cameraReady: false,
+      aiReady: false,
+      gameRunning: false,
+      gameOver: false,
+      score: 0,
+      completed: 0,
+      startedAt: 0,
+      elapsed: 0,
+      roundResolving: false,
+      roundTransitionAt: 0,
+      roundWords: [],
+      fruits: [],
+      arrows: [],
+      leftHand: null,
+      rightHand: null,
+      rightGesture: "none",
+      lastRightSeen: 0,
+      pulling: false,
+      pullStartedAt: 0,
+      pullOrigin: null,
+      drawPoint: null,
+      charge: 0,
+      lastCharge: 0,
+      lastChargeSoundAt: 0,
+      lastChargeSoundStep: -1,
+      swapHands: false,
+      showDots: true,
+      soundOn: true,
+      lastShotAt: 0,
+      scorePopupTimer: 0,
+      audio: null,
+      audioMaster: null
+    };
+
+    // ============================================================
+    // WORD BANK
+    // Target words are action verbs; decoys are safe-use phrases.
+    // The word label never reveals whether a fruit is a target.
+    // ============================================================
+    const VERBS = [
+      "หลอกลวงออนไลน์", "ขโมยข้อมูล", "แฮ็กระบบ", "แอบอ้างตัวตน", "ติดตั้งไวรัส",
+      "ทำลายระบบ", "ถ่ายรูปหลุดเพื่อน", "คัดลอกผลงาน", "เผยแพร่ข้อมูลส่วนตัว", "ส่งลิงก์หลอกลวง",
+      "ปลอมบัญชีผู้ใช้", "ลักลอบเข้าระบบ", "ข่มขู่ทางออนไลน์", "เล่นพนันออนไลน์", "โชว์เลขบัตรประชาชน"
+    ];
+    const DECOYS = [
+      "ไม่เปิดเผยข้อมูล", "ตั้งรหัสผ่านเดายาก", "รูปสวยงาม", "ใช้งานอินเทอร์เน็ต", "โพสต์เฟซบุ๊ก",
+      "ไม่กดลิงก์มั่ว", "ไม่แสดงเลขบัญชี", "ออกจากระบบหลังใช้", "ใช้ AI ช่วยหาข้อมูล", "รักษาข้อมูลส่วนตัว",
+      "ปิดเสียงในโรงภาพยนตร์", "ตรวจสอบก่อนแชร์", "เปิดยืนยันสองขั้นตอน", "อัปเดตซอฟต์แวร์", "เคารพสิทธิผู้อื่น"
+    ];
+
+    // ============================================================
+    // SOUND: all effects are synthesized with Web Audio API.
+    // ============================================================
+    function initAudio() {
+      if (state.audio) {
+        if (state.audio.state === "suspended") state.audio.resume().catch(() => {});
+        return;
+      }
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      try {
+        state.audio = new AudioContextClass();
+        state.audioMaster = state.audio.createGain();
+        state.audioMaster.gain.value = 0.55;
+        state.audioMaster.connect(state.audio.destination);
+      } catch (err) {
+        console.warn("Web Audio is not available", err);
+      }
+    }
+
+    function tone(freq, duration = 0.12, type = "sine", volume = 0.12, endFreq = null, delay = 0) {
+      if (!state.soundOn || !state.audio || !state.audioMaster) return;
+      const ctx = state.audio;
+      const now = ctx.currentTime + delay;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(Math.max(35, freq), now);
+      if (endFreq) osc.frequency.exponentialRampToValueAtTime(Math.max(35, endFreq), now + duration);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.001, volume), now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      osc.connect(gain);
+      gain.connect(state.audioMaster);
+      osc.start(now);
+      osc.stop(now + duration + 0.025);
+    }
+
+    function sfx(name, amount = 0) {
+      if (name !== "soundOn" && !state.soundOn) return;
+      switch (name) {
+        case "click": tone(520, .055, "triangle", .07, 420); break;
+        case "toggle": tone(620, .075, "sine", .08, 760); break;
+        case "check": tone(360, .12, "triangle", .09, 580); break;
+        case "camera": tone(540, .12, "sine", .09, 720); tone(760, .12, "sine", .07, 900, .12); break;
+        case "ai": tone(620, .10, "triangle", .09, 820); tone(900, .13, "sine", .07, 1100, .11); break;
+        case "ready": tone(660, .12, "sine", .08, 880); tone(880, .16, "sine", .09, 1180, .13); break;
+        case "start": tone(440, .14, "triangle", .10, 660); tone(660, .15, "triangle", .10, 990, .14); tone(990, .18, "sine", .08, 1320, .28); break;
+        case "draw": tone(230, .16, "triangle", .08, 360); break;
+        case "charge": tone(280 + amount * 450, .075, "sine", .035 + amount * .03, 340 + amount * 650); break;
+        case "shoot": tone(260, .11, "sawtooth", .09, 110); tone(620, .08, "triangle", .06, 360, .04); break;
+        case "weak": tone(190, .22, "triangle", .10, 105); break;
+        case "correct": tone(660, .12, "sine", .10, 880); tone(880, .14, "sine", .11, 1320, .12); tone(1180, .18, "triangle", .08, 1500, .25); break;
+        case "wrong": tone(260, .18, "square", .07, 175); tone(180, .20, "triangle", .07, 120, .13); break;
+        case "fall": tone(320, .18, "triangle", .08, 150); break;
+        case "edge": tone(480, .08, "sine", .06, 700); break;
+        case "next": tone(540, .09, "sine", .06, 690); tone(690, .09, "sine", .06, 850, .08); break;
+        case "end": tone(520, .15, "triangle", .09, 660); tone(660, .15, "triangle", .09, 880, .15); tone(880, .24, "sine", .10, 1180, .3); break;
+        case "soundOn": tone(720, .11, "sine", .09, 960); break;
+        case "soundOff": tone(420, .12, "sine", .07, 240); break;
+      }
+    }
+
+    // ============================================================
+    // THREE SETUP: transparent 2D/3D overlay above the live camera.
+    // ============================================================
+    let scene, camera3D, renderer;
+    let screenW = window.innerWidth;
+    let screenH = window.innerHeight;
+    let bowGroup, bowString, previewArrow;
+    const clock = new THREE.Clock();
+    let bowScreen = { x: screenW * .68, y: screenH * .53 };
+    let bowTarget = { x: screenW * .68, y: screenH * .53 };
+    let bowAngle = 0;
+    let bowTargetAngle = 0;
+
+    function toWorld(sx, sy, z = 0) {
+      return new THREE.Vector3(sx - screenW / 2, screenH / 2 - sy, z);
+    }
+
+    function toScreen(worldX, worldY) {
+      return { x: worldX + screenW / 2, y: screenH / 2 - worldY };
+    }
+
+    function makeMaterial(color, roughness = .5, metalness = .05) {
+      return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+    }
+
+    function setupThree() {
+      scene = new THREE.Scene();
+      camera3D = new THREE.OrthographicCamera(-screenW / 2, screenW / 2, screenH / 2, -screenH / 2, .1, 1200);
+      camera3D.position.set(0, 0, 500);
+      camera3D.lookAt(0, 0, 0);
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(screenW, screenH);
+      renderer.setClearColor(0x000000, 0);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      rendererRoot.appendChild(renderer.domElement);
+      scene.add(new THREE.AmbientLight(0xffffff, 1.55));
+      const light = new THREE.DirectionalLight(0xffffff, 1.1);
+      light.position.set(-180, 260, 400);
+      scene.add(light);
+      createBow();
+      window.addEventListener("resize", resizeAll);
+    }
+
+    // The bow and projectile are intentionally playful, toy-like arcade graphics.
+    // The projectile has a rounded foam tip rather than a realistic sharp point.
+    function createArrowMesh(scale = 1) {
+      const group = new THREE.Group();
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.1, 53, 10), makeMaterial(0xffd36a));
+      shaft.rotation.z = -Math.PI / 2;
+      shaft.position.x = -2;
+      group.add(shaft);
+      const softTip = new THREE.Mesh(new THREE.SphereGeometry(6.2, 16, 12), makeMaterial(0xff8e69));
+      softTip.position.x = 29;
+      group.add(softTip);
+      const finMat = makeMaterial(0x61d5c3);
+      for (const side of [-1, 1]) {
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(14, 3.2, 2.4), finMat);
+        fin.position.set(-23, side * 5, 0);
+        fin.rotation.z = side * .2;
+        group.add(fin);
+      }
+      group.scale.setScalar(scale);
+      return group;
+    }
+
+    function createBow() {
+      bowGroup = new THREE.Group();
+      const bowCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(27, -145, 0),
+        new THREE.Vector3(-5, -115, 2),
+        new THREE.Vector3(-38, -55, 3),
+        new THREE.Vector3(-42, 0, 4),
+        new THREE.Vector3(-38, 55, 3),
+        new THREE.Vector3(-5, 115, 2),
+        new THREE.Vector3(27, 145, 0)
+      ]);
+      const limb = new THREE.Mesh(new THREE.TubeGeometry(bowCurve, 64, 7, 12, false), makeMaterial(0x9b633e, .32));
+      bowGroup.add(limb);
+      const grip = new THREE.Mesh(new THREE.CylinderGeometry(7, 7, 31, 12), makeMaterial(0x5c83a0, .3));
+      grip.position.set(-38, 0, 9);
+      bowGroup.add(grip);
+      for (const y of [-15.5, 15.5]) {
+        const gripEnd = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10), makeMaterial(0x5c83a0, .3));
+        gripEnd.position.set(-38, y, 9);
+        bowGroup.add(gripEnd);
+      }
+      const gripBand = new THREE.Mesh(new THREE.TorusGeometry(8, 2.2, 8, 18), makeMaterial(0xffd66d));
+      gripBand.position.set(-38, 0, 11);
+      bowGroup.add(gripBand);
+      for (const y of [-145, 145]) {
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(8, 16, 12), makeMaterial(0xffd66d, .3));
+        tip.position.set(27, y, 3);
+        bowGroup.add(tip);
+      }
+      bowString = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(27, -145, 5), new THREE.Vector3(61, 0, 5), new THREE.Vector3(27, 145, 5)]),
+        new THREE.LineBasicMaterial({ color: 0xf1fbff, transparent: true, opacity: .95 })
+      );
+      bowGroup.add(bowString);
+      previewArrow = createArrowMesh(.88);
+      previewArrow.position.set(-7, 0, 13);
+      previewArrow.rotation.z = Math.PI;
+      previewArrow.visible = false;
+      bowGroup.add(previewArrow);
+      bowGroup.position.copy(toWorld(bowScreen.x, bowScreen.y, 22));
+      scene.add(bowGroup);
+    }
+
+    function updateBowVisual() {
+      if (!bowGroup) return;
+      const minX = screenW * .5 + 84;
+      const maxX = screenW - 98;
+      // Smoothly follow the left hand, but hard-lock to the right half boundary.
+      bowTarget.x = THREE.MathUtils.clamp(bowTarget.x, minX, maxX);
+      bowTarget.y = THREE.MathUtils.clamp(bowTarget.y, 165, screenH - 165);
+      bowScreen.x += (bowTarget.x - bowScreen.x) * .22;
+      bowScreen.y += (bowTarget.y - bowScreen.y) * .22;
+      bowAngle += (bowTargetAngle - bowAngle) * .18;
+      bowGroup.position.copy(toWorld(bowScreen.x, bowScreen.y, 22));
+      bowGroup.rotation.z = bowAngle;
+      previewArrow.visible = state.pulling;
+
+      let pullLocal = { x: 61, y: 0 };
+      if (state.pulling && state.drawPoint) {
+        const dx = state.drawPoint.x - bowScreen.x;
+        const dy = bowScreen.y - state.drawPoint.y;
+        pullLocal = {
+          x: dx * Math.cos(bowAngle) + dy * Math.sin(bowAngle),
+          y: -dx * Math.sin(bowAngle) + dy * Math.cos(bowAngle)
+        };
+      }
+      const pts = [
+        new THREE.Vector3(27, 145, 5),
+        new THREE.Vector3(pullLocal.x, pullLocal.y, 5),
+        new THREE.Vector3(27, -145, 5)
+      ];
+      const newGeom = new THREE.BufferGeometry().setFromPoints(pts);
+      bowString.geometry.dispose();
+      bowString.geometry = newGeom;
+    }
+
+    function resizeAll() {
+      screenW = window.innerWidth;
+      screenH = window.innerHeight;
+      if (renderer && camera3D) {
+        renderer.setSize(screenW, screenH);
+        camera3D.left = -screenW / 2;
+        camera3D.right = screenW / 2;
+        camera3D.top = screenH / 2;
+        camera3D.bottom = -screenH / 2;
+        camera3D.updateProjectionMatrix();
+      }
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      handCanvas.width = Math.round(screenW * dpr);
+      handCanvas.height = Math.round(screenH * dpr);
+      handCanvas.style.width = screenW + "px";
+      handCanvas.style.height = screenH + "px";
+      handCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      bowTarget.x = Math.max(screenW * .5 + 84, Math.min(screenW - 98, bowTarget.x));
+      bowTarget.y = Math.max(165, Math.min(screenH - 165, bowTarget.y));
+    }
+
+    // ============================================================
+    // FRUITS: 3D fruit meshes with separate 2D HTML word labels.
+    // ============================================================
+    const FRUIT_COLORS = [0xff6c7c, 0xffbf4e, 0x65c98b, 0x8c8df4, 0xf58fc2, 0xff8b50];
+
+    function randomItem(list) { return list[Math.floor(Math.random() * list.length)]; }
+
+    function createFruit(word, isTarget, lane, y) {
+      const group = new THREE.Group();
+      const color = randomItem(FRUIT_COLORS);
+      const body = new THREE.Mesh(new THREE.SphereGeometry(CONFIG.fruitRadius, 24, 18), makeMaterial(color, .28));
+      body.scale.set(1.0, 1.08, .86);
+      group.add(body);
+      const shine = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .46 }));
+      shine.position.set(-12, 13, 27);
+      group.add(shine);
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.8, 13, 8), makeMaterial(0x805331));
+      stem.position.set(2, 35, 0);
+      stem.rotation.z = -.18;
+      group.add(stem);
+      const leaf = new THREE.Mesh(new THREE.SphereGeometry(8, 12, 8), makeMaterial(0x3aa879));
+      leaf.scale.set(1.45, .5, .42);
+      leaf.position.set(10, 39, 0);
+      leaf.rotation.z = .38;
+      group.add(leaf);
+
+      const laneFractions = [.05, .12, .185];
+      const sx = screenW * laneFractions[lane] + (Math.random() - .5) * Math.min(18, screenW * .012);
+      group.position.copy(toWorld(sx, y, 8));
+      scene.add(group);
+
+      const label = document.createElement("div");
+      label.className = "fruit-label";
+      label.textContent = word;
+      label.style.maxWidth = Math.min(170, screenW * .125) + "px";
+      fruitLabelsRoot.appendChild(label);
+
+      return {
+        word,
+        isTarget,
+        group,
+        label,
+        x: sx,
+        y,
+        speed: CONFIG.fruitFallSpeedMin + Math.random() * (CONFIG.fruitFallSpeedMax - CONFIG.fruitFallSpeedMin),
+        alive: true,
+        attached: false,
+        alpha: 1
+      };
+    }
+
+    function removeFruit(fruit) {
+      if (!fruit || !fruit.alive) return;
+      fruit.alive = false;
+      scene.remove(fruit.group);
+      fruit.label.remove();
+      fruit.group.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+          else obj.material.dispose();
+        }
+      });
+    }
+
+    function updateFruitScreenPosition(fruit) {
+      const p = toScreen(fruit.group.position.x, fruit.group.position.y);
+      fruit.x = p.x;
+      fruit.y = p.y;
+      fruit.label.style.left = p.x + "px";
+      fruit.label.style.top = (p.y - 42) + "px";
+      fruit.label.style.opacity = String(fruit.alpha === undefined ? 1 : fruit.alpha);
+    }
+
+    function spawnRound() {
+      if (!state.gameRunning || state.completed >= CONFIG.totalRounds) return;
+      clearFruits();
+      state.roundResolving = false;
+      state.roundTransitionAt = 0;
+      const targetWord = state.roundWords[state.completed];
+      const decoyPool = DECOYS.filter(word => word !== targetWord);
+      const twoDecoys = shuffle(decoyPool).slice(0, 2);
+      const entries = shuffle([
+        { word: targetWord, target: true },
+        { word: twoDecoys[0], target: false },
+        { word: twoDecoys[1], target: false }
+      ]);
+      entries.forEach((entry, index) => {
+        const y = -75 - index * Math.max(185, screenH * .27);
+        state.fruits.push(createFruit(entry.word, entry.target, index, y));
+      });
+      updateHUD();
+      setMessage(`ข้อ ${state.completed + 1}: เลือกยิงคำกริยาให้ถูกต้อง`, "info");
+      if (state.completed > 0) sfx("next");
+    }
+
+    function clearFruits() {
+      state.fruits.forEach(removeFruit);
+      state.fruits = [];
+    }
+
+    function shuffle(arr) {
+      const a = arr.slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    // ============================================================
+    // ARROWS: arcade projectile motion, screen-edge pin and fade.
+    // ============================================================
+    function fireArrow() {
+      const charge = Math.max(state.lastCharge, state.charge);
+      state.pulling = false;
+      state.drawPoint = null;
+      state.pullOrigin = null;
+      state.charge = 0;
+      state.lastCharge = 0;
+      updateChargeUI();
+      if (charge < CONFIG.minShotCharge) {
+        sfx("weak");
+        setMessage("แรงดึงยังไม่พอ ลองดึงมือให้ไกลขึ้นอีกนิด", "bad");
+        return;
+      }
+
+      const now = performance.now();
+      if (now - state.lastShotAt < 260 || state.roundResolving) return;
+      state.lastShotAt = now;
+      // The projectile follows the direction the 3D bow is facing; the player's
+      // left-hand tilt changes the bow angle and the left-hand height changes origin.
+      const dirX = -Math.cos(bowAngle);
+      const dirY = Math.sin(bowAngle);
+      const origin = {
+        x: bowScreen.x - 26 * Math.cos(bowAngle),
+        y: bowScreen.y + 26 * Math.sin(bowAngle)
+      };
+      const length = Math.hypot(dirX, dirY) || 1;
+      const dx = dirX / length;
+      const dy = dirY / length;
+      const speed = CONFIG.minArrowSpeed + charge * (CONFIG.maxArrowSpeed - CONFIG.minArrowSpeed);
+      const gravity = CONFIG.arrowGravityLow - charge * (CONFIG.arrowGravityLow - CONFIG.arrowGravityHigh);
+
+      const mesh = createArrowMesh(1);
+      const wpos = toWorld(origin.x, origin.y, 34);
+      mesh.position.copy(wpos);
+      mesh.rotation.z = Math.atan2(-dy, dx);
+      scene.add(mesh);
+      state.arrows.push({
+        mesh,
+        x: origin.x,
+        y: origin.y,
+        vx: dx * speed,
+        vy: dy * speed,
+        gravity,
+        attachedFruit: null,
+        pinned: false,
+        pinnedAt: 0,
+        fadeAt: 0,
+        completesRound: false,
+        alpha: 1
+      });
+      sfx("shoot");
+      setMessage(`ยิง! ${Math.round(charge * 100)}%`, "info");
+    }
+
+    function setMeshOpacity(group, opacity) {
+      group.traverse((obj) => {
+        if (!obj.material) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach(mat => {
+          mat.transparent = true;
+          mat.opacity = opacity;
+        });
+      });
+    }
+
+    function removeArrow(arrow) {
+      scene.remove(arrow.mesh);
+      arrow.mesh.traverse(obj => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+          else obj.material.dispose();
+        }
+      });
+      if (arrow.attachedFruit && arrow.attachedFruit.alive) removeFruit(arrow.attachedFruit);
+    }
+
+    function pinArrow(arrow, now) {
+      if (arrow.pinned) return;
+      arrow.x = Math.max(CONFIG.edgePadding, Math.min(screenW - CONFIG.edgePadding, arrow.x));
+      arrow.y = Math.max(CONFIG.edgePadding, Math.min(screenH - CONFIG.edgePadding, arrow.y));
+      arrow.pinned = true;
+      arrow.pinnedAt = now;
+      arrow.fadeAt = now + CONFIG.edgeHoldMs;
+      arrow.vx = 0;
+      arrow.vy = 0;
+      arrow.mesh.position.copy(toWorld(arrow.x, arrow.y, 35));
+      if (arrow.attachedFruit && arrow.attachedFruit.alive) {
+        arrow.attachedFruit.group.position.copy(toWorld(arrow.x + 8, arrow.y + 5, 26));
+        updateFruitScreenPosition(arrow.attachedFruit);
+      }
+      sfx("edge");
+    }
+
+    function updateArrows(dt, now) {
+      for (let i = state.arrows.length - 1; i >= 0; i--) {
+        const arrow = state.arrows[i];
+        if (!arrow.pinned) {
+          arrow.vy += arrow.gravity * dt;
+          arrow.x += arrow.vx * dt;
+          arrow.y += arrow.vy * dt;
+          arrow.mesh.position.copy(toWorld(arrow.x, arrow.y, 35));
+          arrow.mesh.rotation.z = Math.atan2(-arrow.vy, arrow.vx);
+
+          if (!arrow.attachedFruit && !state.roundResolving) {
+            for (const fruit of state.fruits) {
+              if (!fruit.alive || fruit.attached) continue;
+              const distance = Math.hypot(arrow.x - fruit.x, arrow.y - fruit.y);
+              if (distance < CONFIG.fruitRadius + 13) {
+                if (fruit.isTarget) {
+                  hitTarget(arrow, fruit);
+                } else {
+                  hitDecoy(arrow, fruit);
+                }
+                break;
+              }
+            }
+          }
+
+          if (arrow.attachedFruit && arrow.attachedFruit.alive) {
+            const f = arrow.attachedFruit;
+            f.attached = true;
+            f.group.position.copy(toWorld(arrow.x + 8, arrow.y + 5, 26));
+            updateFruitScreenPosition(f);
+          }
+
+          if (arrow.x <= CONFIG.edgePadding || arrow.x >= screenW - CONFIG.edgePadding || arrow.y <= CONFIG.edgePadding || arrow.y >= screenH - CONFIG.edgePadding) {
+            pinArrow(arrow, now);
+          }
+        } else if (now >= arrow.fadeAt) {
+          const alpha = Math.max(0, 1 - (now - arrow.fadeAt) / CONFIG.fadeMs);
+          setMeshOpacity(arrow.mesh, alpha);
+          if (arrow.attachedFruit && arrow.attachedFruit.alive) {
+            setMeshOpacity(arrow.attachedFruit.group, alpha);
+            arrow.attachedFruit.alpha = alpha;
+            arrow.attachedFruit.label.style.opacity = String(alpha);
+          }
+          if (alpha <= 0) {
+            removeArrow(arrow);
+            state.arrows.splice(i, 1);
+            if (arrow.completesRound && state.gameRunning) completeRound();
+          }
+        }
+      }
+    }
+
+    function hitTarget(arrow, fruit) {
+      if (state.roundResolving) return;
+      state.score += CONFIG.correctPoints;
+      state.roundResolving = true;
+      arrow.attachedFruit = fruit;
+      arrow.completesRound = true;
+      sfx("correct");
+      showScorePopup(`+${CONFIG.correctPoints}`, true);
+      setMessage(`+${CONFIG.correctPoints} ถูกต้อง!`, "good");
+      // Remove the other two fruit; keep the hit fruit attached to the projectile.
+      state.fruits.slice().forEach(other => { if (other !== fruit) removeFruit(other); });
+      state.fruits = state.fruits.filter(f => f === fruit && f.alive);
+      updateHUD();
+    }
+
+    function hitDecoy(arrow, fruit) {
+      state.score = Math.max(0, state.score - CONFIG.decoyPenalty);
+      removeFruit(fruit);
+      state.fruits = state.fruits.filter(f => f.alive);
+      sfx("wrong");
+      showScorePopup(`-${CONFIG.decoyPenalty}`, false);
+      setMessage(`-${CONFIG.decoyPenalty} คำหลอก! ลองเลือกคำอื่น`, "bad");
+      updateHUD();
+    }
+
+    function handleTargetFall() {
+      if (state.roundResolving) return;
+      state.roundResolving = true;
+      state.score = Math.max(0, state.score - CONFIG.targetPenalty);
+      sfx("fall");
+      showScorePopup(`-${CONFIG.targetPenalty}`, false);
+      setMessage(`-${CONFIG.targetPenalty} กริยาตกพื้น!`, "bad");
+      clearFruits();
+      updateHUD();
+      state.roundTransitionAt = performance.now() + 850;
+    }
+
+    function completeRound() {
+      // No arrow from a previous question may interact with the next question.
+      state.arrows.forEach(removeArrow);
+      state.arrows = [];
+      state.completed++;
+      if (state.completed >= CONFIG.totalRounds) {
+        finishGame();
+      } else {
+        spawnRound();
+      }
+    }
+
+    function updateFruits(dt, now) {
+      if (state.roundResolving) return;
+      for (const fruit of state.fruits) {
+        if (!fruit.alive || fruit.attached) continue;
+        fruit.group.position.y -= fruit.speed * dt;
+        fruit.group.rotation.z = Math.sin(now * .0015 + fruit.x) * .045;
+        updateFruitScreenPosition(fruit);
+        if (fruit.y > screenH + 55) {
+          if (fruit.isTarget) {
+            handleTargetFall();
+            return;
+          }
+          removeFruit(fruit);
+        }
+      }
+      state.fruits = state.fruits.filter(f => f.alive);
+    }
+
+    // ============================================================
+    // HAND TRACKING: MediaPipe Hands, separate left and right hands.
+    // ============================================================
+    let hands = null;
+    let cameraController = null;
+    let trackingBusy = false;
+
+    function landmarkDistance(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function getGesture(landmarks) {
+      const wrist = landmarks[0];
+      const fingerPairs = [[8, 6], [12, 10], [16, 14], [20, 18]];
+      let extended = 0;
+      for (const [tip, pip] of fingerPairs) {
+        if (landmarkDistance(landmarks[tip], wrist) > landmarkDistance(landmarks[pip], wrist) * 1.12) extended++;
+      }
+      if (extended <= 1) return "fist";
+      if (extended >= 3) return "open";
+      return "half";
+    }
+
+    function palmCenter(landmarks) {
+      const ids = [0, 5, 9, 13, 17];
+      const total = ids.reduce((acc, id) => ({ x: acc.x + landmarks[id].x, y: acc.y + landmarks[id].y }), { x: 0, y: 0 });
+      return { x: total.x / ids.length, y: total.y / ids.length };
+    }
+
+    function handleHandResults(results) {
+      const previousLeft = state.leftHand;
+      const previousRight = state.rightHand;
+      state.leftHand = null;
+      state.rightHand = null;
+      const allLandmarks = results.multiHandLandmarks || [];
+      const handedness = results.multiHandedness || [];
+
+      allLandmarks.forEach((landmarks, index) => {
+        const rawLabel = handedness[index] && handedness[index].label ? handedness[index].label.toLowerCase() : "";
+        // MediaPipe assumes mirrored input for handedness. The video is mirrored in CSS only,
+        // so invert the API label here to map to the user's physical left/right hand.
+        let label = rawLabel === "left" ? "right" : rawLabel === "right" ? "left" : "";
+        const center = palmCenter(landmarks);
+        const wristX = (1 - landmarks[0].x) * screenW;
+        const wristY = landmarks[0].y * screenH;
+        const middleX = (1 - landmarks[9].x) * screenW;
+        const middleY = landmarks[9].y * screenH;
+        const handDx = middleX - wristX;
+        const handDyWorld = wristY - middleY;
+        const handWorldAngle = Math.atan2(handDyWorld, handDx);
+        const point = {
+          x: (1 - center.x) * screenW,
+          y: center.y * screenH,
+          wristX,
+          wristY,
+          angle: THREE.MathUtils.clamp(handWorldAngle - Math.PI / 2, -.55, .55),
+          landmarks,
+          gesture: getGesture(landmarks)
+        };
+        if (state.swapHands) label = label === "left" ? "right" : label === "right" ? "left" : label;
+        if (!label) {
+          // Fallback only when handedness metadata is unavailable.
+          label = point.x < screenW * .5 ? "right" : "left";
+        }
+        if (label === "left") state.leftHand = point;
+        else if (label === "right") state.rightHand = point;
+      });
+
+      updateHandStatus();
+      if (state.leftHand) {
+        const minX = screenW * .5 + 84;
+        const maxX = screenW - 98;
+        // If the user's left hand crosses into the left half, lock the bow to the divider.
+        const desiredX = state.leftHand.x < screenW * .5 ? minX : state.leftHand.x;
+        bowTarget.x = THREE.MathUtils.clamp(desiredX, minX, maxX);
+        bowTarget.y = THREE.MathUtils.clamp(state.leftHand.y, 165, screenH - 165);
+        bowTargetAngle = state.leftHand.angle;
+      } else if (previousLeft && !state.leftHand) {
+        // Keep the last bow position if tracking briefly drops.
+        bowTarget.x = bowScreen.x;
+        bowTarget.y = bowScreen.y;
+      }
+
+      const now = performance.now();
+      if (state.rightHand) {
+        state.lastRightSeen = now;
+        state.rightGesture = state.rightHand.gesture;
+        processRightHand(state.rightHand, now);
+      } else {
+        state.rightGesture = "none";
+        if (state.pulling) {
+          const lostFor = now - state.lastRightSeen;
+          // Preserve the charged arrow through short tracking gaps (at least 0.3 seconds).
+          if (lostFor <= CONFIG.handLostGraceMs) {
+            // Intentionally keep pull state and last known charge.
+          } else if (lostFor > CONFIG.handLostCancelMs) {
+            state.pulling = false;
+            state.drawPoint = null;
+            state.charge = 0;
+            state.lastCharge = 0;
+            updateChargeUI();
+          }
+        }
+      }
+
+      if (state.showDots) drawHandDots(allLandmarks);
+      else clearHandCanvas();
+    }
+
+    function processRightHand(hand, now) {
+      const hx = hand.x;
+      const hy = hand.y;
+      if (!state.pulling && hand.gesture === "fist" && state.gameRunning && !state.roundResolving) {
+        const stringAnchor = { x: bowScreen.x + 52, y: bowScreen.y };
+        const nearBow = Math.hypot(hx - stringAnchor.x, hy - stringAnchor.y) < Math.min(380, screenW * .31);
+        const inPlayerZone = hx >= screenW * .5 - 25;
+        if (nearBow && inPlayerZone) {
+          state.pulling = true;
+          state.pullStartedAt = now;
+          state.pullOrigin = { x: hx, y: hy };
+          state.drawPoint = { x: hx, y: hy };
+          state.charge = 0;
+          state.lastCharge = 0;
+          state.lastChargeSoundStep = -1;
+          sfx("draw");
+          setMessage("กำมือแล้ว! เลื่อนมือขวาไปทางขวาเพื่อชาร์จแรง", "info");
+        }
+      }
+
+      if (state.pulling) {
+        state.drawPoint = { x: hx, y: hy };
+        if (hand.gesture === "open") {
+          // Release is accepted after any tracking state, including fist -> half -> open.
+          fireArrow();
+          return;
+        }
+        if (hand.gesture === "fist" || hand.gesture === "half") {
+          const rawDistance = Math.max(0, hx - state.pullOrigin.x - CONFIG.drawDeadZone);
+          const targetCharge = THREE.MathUtils.clamp(rawDistance / CONFIG.maxDrawPixels, 0, 1);
+          // Smoothly charge and smoothly relax when the hand moves back toward the bow.
+          const response = targetCharge > state.charge ? .16 : .12;
+          state.charge += (targetCharge - state.charge) * response;
+          state.lastCharge = Math.max(state.lastCharge, state.charge);
+          // Keep the latest actual charge, including a small relaxation while the hand moves inward.
+          state.lastCharge = state.charge;
+          updateChargeUI();
+          const step = Math.floor(state.charge * 10);
+          if (step !== state.lastChargeSoundStep && now - state.lastChargeSoundAt > 115 && state.charge > .08) {
+            state.lastChargeSoundStep = step;
+            state.lastChargeSoundAt = now;
+            sfx("charge", state.charge);
+          }
+        }
+      }
+    }
+
+    function updateHandStatus() {
+      const leftText = state.leftHand ? "เจอ" : "ไม่เจอ";
+      const rightMap = { fist: "กำมือ", open: "แบมือ", half: "กึ่งแบ", none: "ไม่เจอ" };
+      const leftEl = $("hand-left-status");
+      const rightEl = $("hand-right-status");
+      if (leftEl) leftEl.textContent = `มือซ้าย: ${leftText}`;
+      if (rightEl) rightEl.textContent = `มือขวา: ${rightMap[state.rightGesture] || "ไม่เจอ"}`;
+    }
+
+    function drawHandDots(allLandmarks) {
+      clearHandCanvas();
+      const connections = [
+        [0,1],[1,2],[2,3],[3,4], [0,5],[5,6],[6,7],[7,8], [5,9],[9,10],[10,11],[11,12],
+        [9,13],[13,14],[14,15],[15,16], [13,17],[17,18],[18,19],[19,20],[0,17]
+      ];
+      handCtx.lineWidth = 3;
+      handCtx.strokeStyle = "rgba(255,255,255,.72)";
+      allLandmarks.forEach(landmarks => {
+        connections.forEach(([a,b]) => {
+          handCtx.beginPath();
+          handCtx.moveTo((1 - landmarks[a].x) * screenW, landmarks[a].y * screenH);
+          handCtx.lineTo((1 - landmarks[b].x) * screenW, landmarks[b].y * screenH);
+          handCtx.stroke();
+        });
+        landmarks.forEach((p, i) => {
+          handCtx.beginPath();
+          handCtx.arc((1 - p.x) * screenW, p.y * screenH, i % 4 === 0 ? 4.2 : 2.7, 0, Math.PI * 2);
+          handCtx.fillStyle = i % 4 === 0 ? "#ffe16d" : "#6df2d1";
+          handCtx.fill();
+        });
+      });
+    }
+
+    function clearHandCanvas() {
+      handCtx.clearRect(0, 0, screenW, screenH);
+    }
+
+    function updateChargeUI() {
+      if (state.pulling) {
+        chargeUI.style.display = "flex";
+        const sx = Math.min(screenW - 50, Math.max(screenW * .5 + 55, bowScreen.x + 88));
+        const sy = Math.max(120, Math.min(screenH - 120, bowScreen.y));
+        chargeUI.style.left = sx + "px";
+        chargeUI.style.top = sy + "px";
+        const pct = Math.round(state.charge * 100);
+        chargeFill.style.height = pct + "%";
+        chargePercent.textContent = pct + "%";
+      } else {
+        chargeUI.style.display = "none";
+        chargeFill.style.height = "0%";
+      }
+    }
+
+    // ============================================================
+    // CAMERA / AI CHECK
+    // ============================================================
+    function setSystemStatus(which, status, message = "") {
+      const el = which === "camera" ? $("camera-status") : $("ai-status");
+      const icon = el.querySelector(".system-icon");
+      const text = el.querySelector(".state");
+      el.classList.remove("loading", "ready", "error");
+      if (status === "loading") {
+        el.classList.add("loading");
+        icon.innerHTML = '<span class="spinner"></span>';
+        text.textContent = "กำลังโหลด...";
+      } else if (status === "ready") {
+        el.classList.add("ready");
+        icon.textContent = "✓";
+        text.textContent = "พร้อมใช้งาน";
+      } else if (status === "error") {
+        el.classList.add("error");
+        icon.textContent = "!";
+        text.textContent = "ไม่สำเร็จ";
+      } else {
+        icon.textContent = which === "camera" ? "📷" : "✋";
+        text.textContent = "รอตรวจสอบ";
+      }
+      if (message) systemError.textContent = message;
+    }
+
+    async function stopCamera() {
+      try { if (cameraController && cameraController.stop) cameraController.stop(); } catch (_) {}
+      cameraController = null;
+      try {
+        const stream = video.srcObject;
+        if (stream && stream.getTracks) stream.getTracks().forEach(track => track.stop());
+      } catch (_) {}
+      video.srcObject = null;
+      video.classList.remove("live");
+    }
+
+    async function checkSystems() {
+      if (state.checking) return;
+      state.checking = true;
+      initAudio();
+      sfx("check");
+      checkBtn.disabled = true;
+      retryBtn.hidden = true;
+      startBtn.hidden = true;
+      checkBtn.textContent = "กำลังตรวจสอบระบบ...";
+      systemError.textContent = "";
+      state.cameraReady = false;
+      state.aiReady = false;
+      setSystemStatus("camera", "loading");
+      setSystemStatus("ai", "loading");
+      await stopCamera();
+      try {
+        if (!window.Hands || !window.Camera) {
+          throw new Error("โหลดไลบรารี MediaPipe ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง");
+        }
+
+        // Initialize AI hand tracking first; its model files are loaded from the MediaPipe CDN.
+        hands = new Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+        hands.setOptions({
+          maxNumHands: 2,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.62,
+          minTrackingConfidence: 0.58
+        });
+        hands.onResults(handleHandResults);
+        if (typeof hands.initialize === "function") await hands.initialize();
+        state.aiReady = true;
+        setSystemStatus("ai", "ready");
+        sfx("ai");
+
+        // Camera Utils owns the webcam stream and sends frames to MediaPipe Hands.
+        cameraController = new Camera(video, {
+          onFrame: async () => {
+            if (!state.aiReady || !hands || trackingBusy || video.readyState < 2) return;
+            trackingBusy = true;
+            try { await hands.send({ image: video }); }
+            catch (err) { console.warn("Hand tracking frame error", err); }
+            trackingBusy = false;
+          },
+          width: 1280,
+          height: 720
+        });
+        await cameraController.start();
+        if (video.readyState >= 2) await video.play().catch(() => {});
+        state.cameraReady = true;
+        video.classList.add("live");
+        setSystemStatus("camera", "ready");
+        sfx("camera");
+
+        if (state.cameraReady && state.aiReady) {
+          startBtn.hidden = false;
+          checkBtn.hidden = true;
+          retryBtn.hidden = true;
+          systemError.textContent = "ระบบพร้อมแล้ว! กดเริ่มเกมได้เลย";
+          sfx("ready");
+        }
+      } catch (err) {
+        console.error(err);
+        const msg = (err && err.message) ? err.message : "ไม่สามารถเริ่มระบบได้";
+        if (!state.cameraReady) setSystemStatus("camera", "error");
+        if (!state.aiReady) setSystemStatus("ai", "error");
+        systemError.textContent = msg.includes("Permission") || msg.includes("NotAllowed")
+          ? "ไม่สามารถเปิดกล้องได้ กรุณากดอนุญาตการใช้กล้องในเบราว์เซอร์ แล้วลองอีกครั้ง"
+          : msg;
+        retryBtn.hidden = false;
+      } finally {
+        state.checking = false;
+        checkBtn.disabled = false;
+        checkBtn.textContent = "🔍 ตรวจสอบกล้องและโหลด AI Track";
+      }
+    }
+
+    // ============================================================
+    // HUD / GAME FLOW
+    // ============================================================
+    function setMessage(text, type = "info") {
+      gameMessage.textContent = text;
+      gameMessage.className = type;
+    }
+
+    function showScorePopup(text, good) {
+      popup.textContent = text;
+      popup.className = "";
+      popup.classList.add(good ? "good" : "bad");
+      // Force reflow so the animation can replay for consecutive score events.
+      void popup.offsetWidth;
+      popup.classList.add("show");
+      if (state.scorePopupTimer) clearTimeout(state.scorePopupTimer);
+      state.scorePopupTimer = setTimeout(() => popup.classList.remove("show"), 1050);
+    }
+
+    function updateHUD() {
+      $("hud-score").querySelector(".value").textContent = state.score;
+      $("hud-progress").querySelector(".value").textContent = `${Math.min(CONFIG.totalRounds, state.completed)}/${CONFIG.totalRounds}`;
+    }
+
+    function formatTime(ms) {
+      const seconds = Math.max(0, Math.floor(ms / 1000));
+      const mins = Math.floor(seconds / 60);
+      return `${String(mins).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+    }
+
+    function startGame() {
+      initAudio();
+      sfx("start");
+      clearFruits();
+      state.arrows.forEach(removeArrow);
+      state.arrows = [];
+      state.score = 0;
+      state.completed = 0;
+      state.elapsed = 0;
+      state.startedAt = performance.now();
+      state.gameRunning = true;
+      state.gameOver = false;
+      state.roundResolving = false;
+      state.roundTransitionAt = 0;
+      state.pulling = false;
+      state.charge = 0;
+      state.lastCharge = 0;
+      state.roundWords = shuffle(VERBS);
+      bowTarget.x = Math.max(screenW * .5 + 84, Math.min(screenW - 98, screenW * .68));
+      bowTarget.y = screenH * .53;
+      bowScreen.x = bowTarget.x;
+      bowScreen.y = bowTarget.y;
+      bowAngle = 0;
+      bowTargetAngle = 0;
+      startScreen.style.display = "none";
+      endScreen.style.display = "none";
+      hud.style.display = "block";
+      sideControls.style.display = "flex";
+      setMessage("เริ่มเกมแล้ว! กำมือขวาเพื่อดึง แล้วแบมือเพื่อยิง", "info");
+      updateHUD();
+      spawnRound();
+    }
+
+    function finishGame() {
+      state.gameRunning = false;
+      state.gameOver = true;
+      state.pulling = false;
+      updateChargeUI();
+      hud.style.display = "none";
+      sideControls.style.display = "none";
+      $("final-score").textContent = `${state.score} คะแนน`;
+      $("final-time").textContent = `ทำครบ ${CONFIG.totalRounds}/${CONFIG.totalRounds} ข้อ • ใช้เวลา ${formatTime(state.elapsed)}`;
+      endScreen.style.display = "grid";
+      sfx("end");
+    }
+
+    function updateToggleButton(button, enabled, onLabel, offLabel) {
+      button.classList.toggle("on", enabled);
+      button.classList.toggle("off", !enabled);
+      button.querySelector(".state-pill").textContent = enabled ? onLabel : offLabel;
+    }
+
+    // ============================================================
+    // MAIN GAME LOOP
+    // ============================================================
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), .04);
+      const now = performance.now();
+      updateBowVisual();
+      updateChargeUI();
+
+      if (state.gameRunning) {
+        state.elapsed = now - state.startedAt;
+        $("hud-time").querySelector(".value").textContent = formatTime(state.elapsed);
+        updateFruits(dt, now);
+        updateArrows(dt, now);
+        if (state.roundTransitionAt && now >= state.roundTransitionAt) {
+          state.roundTransitionAt = 0;
+          completeRound();
+        }
+      }
+
+      // Keep every fruit label aligned to its 3D fruit while the camera and scene move.
+      state.fruits.forEach(fruit => { if (fruit.alive) updateFruitScreenPosition(fruit); });
+      if (renderer && scene && camera3D) renderer.render(scene, camera3D);
+    }
+
+    // ============================================================
+    // UI EVENTS
+    // ============================================================
+    checkBtn.addEventListener("click", checkSystems);
+    retryBtn.addEventListener("click", checkSystems);
+    startBtn.addEventListener("click", startGame);
+    $("play-again-btn").addEventListener("click", startGame);
+
+    $("swap-btn").addEventListener("click", () => {
+      initAudio(); sfx("click");
+      state.swapHands = !state.swapHands;
+      updateToggleButton($("swap-btn"), state.swapHands, "เปิด", "ปิด");
+      setMessage(state.swapHands ? "สลับการอ่านมือแล้ว" : "กลับมาใช้การอ่านมือปกติ", "info");
+      sfx("toggle");
+    });
+
+    $("dots-btn").addEventListener("click", () => {
+      initAudio(); sfx("click");
+      state.showDots = !state.showDots;
+      updateToggleButton($("dots-btn"), state.showDots, "เปิด", "ปิด");
+      if (!state.showDots) clearHandCanvas();
+      sfx("toggle");
+    });
+
+    $("sound-btn").addEventListener("click", () => {
+      initAudio();
+      const next = !state.soundOn;
+      if (next) {
+        state.soundOn = true;
+        sfx("soundOn");
+      } else {
+        sfx("soundOff");
+        state.soundOn = false;
+      }
+      updateToggleButton($("sound-btn"), state.soundOn, "เปิด", "ปิด");
+    });
+
+    $("restart-btn").addEventListener("click", () => {
+      initAudio(); sfx("click");
+      startGame();
+    });
+
+    // ============================================================
+    // BOOT
+    // ============================================================
+    setupThree();
+    resizeAll();
+    updateToggleButton($("swap-btn"), state.swapHands, "เปิด", "ปิด");
+    updateToggleButton($("dots-btn"), true, "เปิด", "ปิด");
+    updateToggleButton($("sound-btn"), true, "เปิด", "ปิด");
+    animate();
+  </script>
+</body>
+</html>
